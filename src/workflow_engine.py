@@ -32,7 +32,7 @@ class WorkflowState(TypedDict, total=False):
 
 
 def _extract_context(request: str) -> dict[str, Any]:
-    """Extract identifiers from a natural-language request."""
+    """Extract structured business inputs from natural-language requests."""
     context: dict[str, Any] = {"user_request": request}
 
     order_match = re.search(r"\bORD-[A-Za-z0-9-]+\b", request, re.I)
@@ -46,8 +46,30 @@ def _extract_context(request: str) -> dict[str, Any]:
     if email_match:
         context["customer_email"] = email_match.group(0)
 
-    return context
+    # Extract labelled campaign fields for deterministic fallback routing.
+    field_patterns = {
+        "campaign_goal": r"\b(?:campaign\s+)?(?:goal|objective)\s*:\s*([^.\n]+)",
+        "target_audience": r"\btarget\s+audience\s*:\s*([^.\n]+)",
+        "products": r"\bproducts?\s*:\s*([^.\n]+)",
+        "promotion": r"\bpromotion\s*:\s*([^.\n]+)",
+        "dates": r"\b(?:campaign\s+)?dates?\s*:\s*([^.\n]+)",
+        "budget": r"\bbudget\s*:\s*([0-9]+(?:\.[0-9]+)?)",
+    }
 
+    for key, pattern in field_patterns.items():
+        match = re.search(pattern, request, re.I)
+        if match:
+            value = match.group(1).strip().rstrip(",; ")
+            if key == "products":
+                context[key] = [
+                    item.strip()
+                    for item in re.split(r",|\band\b", value, flags=re.I)
+                    if item.strip()
+                ]
+            else:
+                context[key] = value
+
+    return context
 
 def load_workflows_node(state: WorkflowState) -> dict[str, Any]:
     """Load workflow definitions from Excel."""

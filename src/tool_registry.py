@@ -24,8 +24,22 @@ PRICES = [
 ]
 
 ORDERS = [
-    {"order_id": "ORD-1001", "email": "customer@example.com", "status": "Shipped", "tracking_id": "TRK-1001"},
-    {"order_id": "ORD-1002", "email": "buyer@example.com", "status": "Processing", "tracking_id": ""},
+    {
+        "order_id": "ORD-1001",
+        "email": "customer@example.com",
+        "status": "Shipped",
+        "shipment_status": "In transit",
+        "tracking_id": "TRK-1001",
+        "items": ["Wireless Keyboard", "Wireless Mouse"],
+    },
+    {
+        "order_id": "ORD-1002",
+        "email": "buyer@example.com",
+        "status": "Processing",
+        "shipment_status": "Not shipped",
+        "tracking_id": "",
+        "items": ["USB-C Cable"],
+    },
 ]
 
 PRODUCTS = [
@@ -34,9 +48,27 @@ PRODUCTS = [
 ]
 
 EMPLOYEES = [
-    {"name": "Aarav", "skills": "inventory, reporting", "active_tasks": 2},
-    {"name": "Diya", "skills": "marketing, content, seo", "active_tasks": 1},
-    {"name": "Kabir", "skills": "data, reporting, analytics", "active_tasks": 3},
+    {
+        "name": "Aarav",
+        "skills": "inventory, reporting, python, excel",
+        "active_tasks": 2,
+        "available": True,
+        "max_tasks": 5,
+    },
+    {
+        "name": "Diya",
+        "skills": "marketing, content, seo",
+        "active_tasks": 1,
+        "available": True,
+        "max_tasks": 4,
+    },
+    {
+        "name": "Kabir",
+        "skills": "data, reporting, analytics, python, excel",
+        "active_tasks": 3,
+        "available": True,
+        "max_tasks": 5,
+    },
 ]
 
 EXECUTION_HISTORY = [
@@ -315,7 +347,7 @@ def validate_prices(context: dict) -> dict:
         if percent > threshold:
             discrepancies.append({
                 "sku": _field(row, "sku", default="Unknown"),
-                "product": _field(row, "product_name", "name", default="Unknown"),
+                "product": _field(row, "product_name", "product", "name", default="Unknown"),
                 "internal_price": internal,
                 "vendor_price": vendor,
                 "difference_percent": round(percent, 2),
@@ -413,10 +445,14 @@ def generate_product_content(context: dict) -> dict:
             ["product_name"],
         )
 
-    features = context.get("features", [])
     audience = str(
         context.get("target_audience", "everyday customers")
     ).strip()
+
+    material = str(context.get("material", "")).strip()
+    color = str(context.get("color", "")).strip()
+    category = str(context.get("category", "")).strip()
+    features = context.get("features", [])
 
     if isinstance(features, str):
         features = [
@@ -430,22 +466,42 @@ def generate_product_content(context: dict) -> dict:
             "features must be a list or comma-separated string"
         )
 
-    feature_text = ", ".join(str(item) for item in features)
-    feature_text = feature_text or "practical design"
+    details = []
+    if category:
+        details.append(f"category: {category}")
+    if material:
+        details.append(f"made with {material}")
+    if color:
+        details.append(f"available in {color}")
+    details.extend(str(item).strip() for item in features if str(item).strip())
+
+    detail_text = "; ".join(details) or "practical design and everyday usability"
+
+    short_description = (
+        f"{name} for {audience}, featuring {detail_text}."
+    )
 
     description = (
-        f"Discover the {name}, designed for {audience}. "
-        f"Key features include {feature_text}. "
-        "A practical choice for your everyday needs."
+        f"Discover the {name}. Designed for {audience}, this product "
+        f"offers {detail_text}. It is a practical option for customers "
+        f"looking for quality and convenience in everyday use."
+    )
+
+    seo_title = f"{name} | Features and Benefits"
+    seo_description = (
+        f"Explore {name} for {audience}. Discover its {detail_text}."
     )
 
     return _success({
         "product_name": name,
+        "category": category or "Not specified",
+        "material": material or "Not specified",
+        "color": color or "Not specified",
+        "target_audience": audience,
+        "short_description": short_description,
         "description": description,
-        "seo_title": f"{name} | Features and Benefits",
-        "seo_description": (
-            f"Explore {name} and its key features: {feature_text}."
-        ),
+        "seo_title": seo_title,
+        "seo_description": seo_description,
     }, "Product content generated")
 
 
@@ -455,7 +511,7 @@ def generate_product_content(context: dict) -> dict:
 
 def get_order_status(context: dict) -> dict:
     order_id = str(context.get("order_id", "")).strip()
-    email = str(context.get("email", "")).strip()
+    email = str(context.get("email") or context.get("customer_email") or "").strip()
 
     if not order_id and not email:
         return _needs_input(
@@ -491,44 +547,73 @@ def get_order_status(context: dict) -> dict:
 # ==================================================
 
 def detect_duplicates(context: dict) -> dict:
+    from difflib import SequenceMatcher
+
     records = _rows(context, "products_file", PRODUCTS)
     seen_skus = {}
     seen_names = {}
     duplicates = []
+    similarity_threshold = 0.85
 
     for row in records:
-        sku = str(
+        sku_original = str(
             _field(row, "sku", "product_id", default="")
-        ).strip().lower()
-
-        name = str(
+        ).strip()
+        name_original = str(
             _field(row, "name", "product_name", default="")
-        ).strip().lower()
+        ).strip()
+
+        sku = sku_original.lower()
+        name = name_original.lower()
+        normalized_name = " ".join(name.split())
 
         duplicate_of = None
+        match_type = None
+        confidence = 0.0
 
         if sku and sku in seen_skus:
             duplicate_of = seen_skus[sku]
-        elif name and name in seen_names:
-            duplicate_of = seen_names[name]
+            match_type = "exact_sku"
+            confidence = 1.0
+
+        elif normalized_name and normalized_name in seen_names:
+            duplicate_of = seen_names[normalized_name]
+            match_type = "exact_name"
+            confidence = 1.0
+
+        elif normalized_name:
+            for existing_name, existing_sku in seen_names.items():
+                score = SequenceMatcher(
+                    None, normalized_name, existing_name
+                ).ratio()
+
+                if score >= similarity_threshold and score > confidence:
+                    confidence = score
+                    duplicate_of = existing_sku
+                    match_type = "similar_name"
 
         if duplicate_of:
             duplicates.append({
-                "sku": _field(row, "sku", default=""),
-                "name": _field(row, "name", "product_name", default=""),
+                "sku": sku_original,
+                "name": name_original,
                 "duplicate_of": duplicate_of,
+                "match_type": match_type,
+                "confidence": round(confidence, 3),
             })
         else:
             if sku:
-                seen_skus[sku] = _field(row, "sku", default="")
-            if name:
-                seen_names[name] = (
-                    _field(row, "sku", default="") or name
-                )
+                seen_skus[sku] = sku_original
+            if normalized_name:
+                seen_names[normalized_name] = sku_original or name_original
 
     return _success(
-        duplicates,
-        f"Found {len(duplicates)} duplicate product(s)",
+        {
+            "total_products_checked": len(records),
+            "duplicate_count": len(duplicates),
+            "similarity_threshold": similarity_threshold,
+            "duplicates": duplicates,
+        },
+        f"Checked {len(records)} products; found {len(duplicates)} duplicate(s)",
     )
 
 
@@ -553,22 +638,70 @@ def create_campaign_brief(context: dict) -> dict:
         context.get("channel", "social media")
     ).strip()
 
+    products = context.get("products", [])
+    if isinstance(products, str):
+        products = [
+            item.strip()
+            for item in re.split(r",|\\band\\b", products, flags=re.I)
+            if item.strip()
+        ]
+    if not isinstance(products, list):
+        raise ValueError("products must be a list or comma-separated string")
+
+    promotion = str(context.get("promotion", "")).strip()
+    dates = str(context.get("dates", "")).strip()
+
+    key_message = (
+        f"{promotion} on {', '.join(str(p) for p in products)}"
+        if promotion and products
+        else promotion or (
+            f"Discover {', '.join(str(p) for p in products)}"
+            if products else f"Communicate a clear benefit to {audience}"
+        )
+    )
+
     brief = {
         "objective": goal,
         "target_audience": audience,
+        "products": products,
+        "promotion": promotion or "No promotion specified",
         "channel": channel,
-        "key_message": f"Communicate a clear benefit to {audience}.",
-        "call_to_action": "Learn more",
+        "campaign_dates": dates or "Not specified",
+        "key_message": key_message,
+        "call_to_action": "Shop now" if promotion else "Learn more",
+        "timeline": [
+            {"phase": "Preparation", "tasks": [
+                "Finalize campaign creative and product details",
+                "Prepare landing pages and tracking"
+            ]},
+            {"phase": "Launch", "tasks": [
+                "Publish campaign content",
+                "Activate promotion and monitor engagement"
+            ]},
+            {"phase": "Optimization", "tasks": [
+                "Review clicks, conversions and sales",
+                "Adjust messaging and channel performance"
+            ]},
+            {"phase": "Wrap-up", "tasks": [
+                "Summarize campaign results",
+                "Document learnings and next steps"
+            ]}
+        ],
+        "execution_checklist": [
+            "Confirm product availability and promotion terms",
+            "Approve campaign copy and creatives",
+            "Verify landing pages and tracking links",
+            "Schedule campaign content",
+            "Monitor performance and budget",
+            "Prepare final performance report"
+        ]
     }
 
     budget = context.get("budget")
-
     if budget not in (None, ""):
         amount = _number(budget, "budget")
-
         if amount < 0:
             raise ValueError("budget cannot be negative")
-
         brief["budget"] = amount
 
     return _success(brief, "Marketing campaign brief created")
@@ -608,39 +741,72 @@ def classify_keywords(context: dict) -> dict:
         )
 
     classified = []
+    seen = set()
 
     for keyword in keywords:
         text = str(keyword).strip()
-        lower = text.lower()
+        lower = " ".join(text.lower().split())
 
-        if not text:
+        if not text or lower in seen:
             continue
+        seen.add(lower)
 
-        if any(word in lower for word in (
-            "buy", "price", "discount", "order", "cheap"
+        if any(term in lower for term in (
+            "buy ", "price", "discount", "order ", "cheap",
+            "purchase", "shop "
         )):
             intent = "Transactional"
-
-        elif any(word in lower for word in (
-            "best", "versus", "vs", "review", "compare"
+        elif any(term in lower for term in (
+            "best ", "versus", " vs ", "review",
+            "compare", "top "
         )):
             intent = "Commercial"
-
-        elif any(word in lower for word in (
-            "how", "what", "why", "guide", "meaning"
+        elif any(term in lower for term in (
+            "how ", "what ", "why ", "guide",
+            "meaning", "tutorial", "how to"
         )):
             intent = "Informational"
-
         else:
-            intent = "Navigational"
+            intent = "Commercial"
+
+        if any(term in lower for term in (
+            "keyboard", "mouse", "laptop", "monitor"
+        )):
+            category = "Electronics"
+        elif any(term in lower for term in (
+            "cable", "hub", "adapter", "charger"
+        )):
+            category = "Accessories"
+        else:
+            category = "General"
+
+        if intent == "Transactional":
+            priority = "High"
+            target_page = "Product page"
+        elif intent == "Commercial":
+            priority = "High" if any(
+                term in lower for term in ("best ", "compare", "review")
+            ) else "Medium"
+            target_page = "Comparison or buying guide"
+        else:
+            priority = "Medium"
+            target_page = "Blog or educational guide"
 
         classified.append({
             "keyword": text,
             "intent": intent,
+            "category": category,
+            "priority": priority,
+            "target_page": target_page,
         })
 
     return _success(
-        classified,
+        {
+            "total_keywords_received": len(keywords),
+            "unique_keywords_classified": len(classified),
+            "duplicate_keywords_removed": len(keywords) - len(classified),
+            "keywords": classified,
+        },
         "Keyword classification completed",
     )
 
@@ -650,7 +816,11 @@ def classify_keywords(context: dict) -> dict:
 # ==================================================
 
 def assign_employee_task(context: dict) -> dict:
-    task = str(context.get("task", "")).strip()
+    task = str(
+        context.get("task")
+        or context.get("task_description")
+        or ""
+    ).strip()
 
     if not task:
         return _needs_input(
@@ -658,46 +828,118 @@ def assign_employee_task(context: dict) -> dict:
             ["task"],
         )
 
+    priority = str(context.get("priority", "medium")).strip().lower()
+    if priority not in {"low", "medium", "high"}:
+        raise ValueError("priority must be low, medium, or high")
+
+    deadline = str(context.get("deadline", "")).strip()
     task_lower = task.lower()
 
     skill_groups = {
-        "marketing": ("marketing", "campaign", "content", "seo"),
+        "python": ("python", "programming", "script", "code"),
+        "excel": ("excel", "spreadsheet", "workbook"),
+        "data": ("data", "analytics", "analysis", "pricing"),
+        "reporting": ("report", "reporting"),
         "inventory": ("inventory", "stock", "restock"),
-        "data": ("data", "report", "analytics", "analysis"),
+        "marketing": ("marketing", "campaign"),
+        "content": ("content", "copywriting"),
+        "seo": ("seo", "keyword", "search engine"),
     }
 
-    required_skills = [
-        skill
-        for skill, terms in skill_groups.items()
+    detected_skills = [
+        skill for skill, terms in skill_groups.items()
         if any(term in task_lower for term in terms)
     ]
+
+    supplied_skills = context.get("required_skills", [])
+    if isinstance(supplied_skills, str):
+        supplied_skills = [
+            item.strip().lower()
+            for item in supplied_skills.split(",")
+            if item.strip()
+        ]
+    if not isinstance(supplied_skills, list):
+        raise ValueError(
+            "required_skills must be a list or comma-separated string"
+        )
+
+    required_skills = list(dict.fromkeys(
+        [str(skill).strip().lower() for skill in supplied_skills
+         if str(skill).strip()]
+        + detected_skills
+    ))
 
     candidates = []
 
     for employee in EMPLOYEES:
-        skills = employee["skills"].lower()
+        employee_skills = {
+            skill.strip().lower()
+            for skill in str(employee.get("skills", "")).split(",")
+            if skill.strip()
+        }
+        available = employee.get("available", True)
+        max_tasks = int(employee.get("max_tasks", 999))
+        active_tasks = int(employee.get("active_tasks", 0))
 
-        if not required_skills or any(
-            skill in skills for skill in required_skills
-        ):
-            candidates.append(employee)
+        if not available or active_tasks >= max_tasks:
+            continue
+
+        matched = [
+            skill for skill in required_skills
+            if skill in employee_skills
+        ]
+
+        if required_skills and not matched:
+            continue
+
+        candidates.append({
+            "employee": employee,
+            "matched_skills": matched,
+            "skill_coverage": (
+                len(matched) / len(required_skills)
+                if required_skills else 1.0
+            ),
+        })
 
     if not candidates:
-        return {
-            "status": "not_found",
-            "message": "No employee matched the requested skills",
-        }
+        return _success({
+            "task": task,
+            "priority": priority,
+            "deadline": deadline or "Not specified",
+            "required_skills": required_skills,
+            "assignment_status": "escalated",
+            "assigned_to": None,
+            "escalation_required": True,
+            "escalation_reason": (
+                "No available employee with matching skills and capacity"
+            ),
+        }, "No suitable employee available; task escalated")
 
-    selected = min(
+    selected_record = max(
         candidates,
-        key=lambda employee: employee["active_tasks"],
+        key=lambda candidate: (
+            candidate["skill_coverage"],
+            -int(candidate["employee"].get("active_tasks", 0)),
+        ),
     )
+    selected = selected_record["employee"]
 
     return _success({
         "task": task,
+        "priority": priority,
+        "deadline": deadline or "Not specified",
+        "required_skills": required_skills,
+        "assignment_status": "recommended",
         "assigned_to": selected["name"],
-        "matched_skills": required_skills,
+        "matched_skills": selected_record["matched_skills"],
+        "skill_coverage": round(selected_record["skill_coverage"], 2),
         "current_active_tasks": selected["active_tasks"],
+        "max_tasks": selected.get("max_tasks", 999),
+        "selection_reason": (
+            "Best skill coverage among available employees; "
+            "workload used as a tie-breaker"
+        ),
+        "escalation_required": False,
     }, "Task assignment recommendation generated")
 
 
@@ -726,6 +968,10 @@ def workflow_performance(context: dict) -> dict:
 
     slow_runs = []
     failures = []
+    successes = []
+    durations = []
+    workflow_counts = {}
+    error_counts = {}
 
     for record in history:
         if not isinstance(record, dict):
@@ -739,23 +985,72 @@ def workflow_performance(context: dict) -> dict:
         )
 
         if duration < 0:
-            raise ValueError(
-                "duration_seconds cannot be negative"
-            )
+            raise ValueError("duration_seconds cannot be negative")
+
+        status = str(record.get("status", "unknown")).lower()
+        workflow_id = str(record.get("workflow_id", "unknown"))
+
+        durations.append(duration)
+        workflow_counts[workflow_id] = (
+            workflow_counts.get(workflow_id, 0) + 1
+        )
 
         if duration > slow_threshold:
             slow_runs.append(record)
 
-        if str(record.get("status", "")).lower() in {
-            "failed", "error"
-        }:
+        if status in {"success", "completed"}:
+            successes.append(record)
+        elif status in {"failed", "failure", "error"}:
             failures.append(record)
+            error = str(record.get("error", "Unspecified error"))
+            error_counts[error] = error_counts.get(error, 0) + 1
+
+    total = len(history)
+    success_rate = round(len(successes) / total * 100, 2) if total else 0.0
+    failure_rate = round(len(failures) / total * 100, 2) if total else 0.0
+    average_duration = round(sum(durations) / total, 2) if total else 0.0
+
+    recommendations = []
+
+    if failures:
+        recommendations.append(
+            "Investigate failed executions and add retries or input validation where appropriate."
+        )
+    if slow_runs:
+        recommendations.append(
+            "Review slow workflows for file I/O, network latency, and unnecessary processing."
+        )
+    if not failures and not slow_runs:
+        recommendations.append(
+            "No failures or slow executions detected in the supplied history."
+        )
+
+    if total == 0:
+        recommendations.append(
+            "Run workflows and collect execution history to establish a performance baseline."
+        )
 
     return _success({
-        "total_executions": len(history),
-        "slow_executions": slow_runs,
+        "total_executions": total,
+        "successful_executions": len(successes),
         "failed_executions": failures,
+        "failure_count": len(failures),
+        "success_rate_percent": success_rate,
+        "failure_rate_percent": failure_rate,
+        "average_duration_seconds": average_duration,
+        "slow_executions": slow_runs,
+        "slow_execution_count": len(slow_runs),
         "slow_threshold_seconds": slow_threshold,
+        "workflow_execution_counts": workflow_counts,
+        "frequent_errors": [
+            {"error": error, "count": count}
+            for error, count in sorted(
+                error_counts.items(),
+                key=lambda item: item[1],
+                reverse=True,
+            )
+        ],
+        "recommendations": recommendations,
     }, "Workflow performance report generated")
 
 

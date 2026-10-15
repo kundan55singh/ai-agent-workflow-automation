@@ -1,2 +1,4 @@
-﻿sku,product_name,price
-V001,Desk Lamp,399
+sku,product_name,price,category
+SKU-201,Wireless Keyboard,799,Electronics
+SKU-202,USB Hub,499,Electronics
+SKU-205,Laptop Stand,899,Accessories
