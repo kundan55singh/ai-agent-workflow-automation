@@ -258,7 +258,7 @@ def inventory_restock(context: dict) -> dict:
         if stock < 0 or threshold < 0:
             raise ValueError("Stock and reorder threshold cannot be negative")
 
-        if stock <= threshold:
+        if stock < threshold:
             restock.append({
                 "sku": _field(row, "sku", "product_id", default="Unknown"),
                 "product": _field(row, "name", "product_name", default="Unknown"),
@@ -338,56 +338,71 @@ def process_vendor_file(context: dict) -> dict:
         )
 
     records = read_tabular_file(file_path)
-
-    required_columns = {"sku", "price"}
-    columns = {
-        str(key).strip().lower().replace(" ", "_")
-        for key in records[0]
-    }
-
-    missing = required_columns - columns
-
-    if missing:
-        return {
-            "status": "error",
-            "message": "Vendor file is missing required columns",
-            "missing_columns": sorted(missing),
-        }
+    output_dir = Path(context.get("output_dir", "outputs"))
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     valid_records = []
     invalid_records = []
 
     for index, row in enumerate(records, start=2):
-        try:
-            sku = _field(row, "sku")
-            price = _number(_field(row, "price"), "price")
+        normalized = {
+            str(key).strip().lower().replace(" ", "_"): value
+            for key, value in row.items()
+        }
 
-            if not sku or price < 0:
-                raise ValueError(
-                    "SKU must be present and price cannot be negative"
-                )
+        sku = normalized.get("sku")
+        product_name = normalized.get("product_name", normalized.get("name"))
 
-            valid_records.append({
-                "sku": str(sku),
-                "price": price,
-            })
-
-        except ValueError as exc:
+        if sku is None or not str(sku).strip():
             invalid_records.append({
                 "row": index,
-                "error": str(exc),
+                "error": "SKU is required",
+                "data": str(row),
             })
+            continue
+
+        if product_name is None or not str(product_name).strip():
+            invalid_records.append({
+                "row": index,
+                "error": "Product name is required",
+                "data": str(row),
+            })
+            continue
+
+        cleaned_row = {
+            str(key).strip().lower().replace(" ", "_"): value
+            for key, value in row.items()
+        }
+        cleaned_row["sku"] = str(sku).strip()
+        cleaned_row["product_name"] = str(product_name).strip()
+        valid_records.append(cleaned_row)
+
+    cleaned_path = output_dir / "cleaned_vendor.csv"
+    invalid_path = output_dir / "invalid_vendor_rows.csv"
+
+    fieldnames = list(valid_records[0].keys()) if valid_records else [
+        "sku", "product_name"
+    ]
+    with cleaned_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(valid_records)
+
+    with invalid_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(
+            f, fieldnames=["row", "error", "data"], extrasaction="ignore"
+        )
+        writer.writeheader()
+        writer.writerows(invalid_records)
 
     return _success({
         "total_rows": len(records),
-        "valid_rows": valid_records,
-        "invalid_rows": invalid_records,
+        "valid_rows": len(valid_records),
+        "invalid_rows": len(invalid_records),
+        "cleaned_file": str(cleaned_path),
+        "invalid_rows_file": str(invalid_path),
+        "invalid_row_details": invalid_records,
     }, "Vendor file processing completed")
-
-
-# ==================================================
-# WF004: PRODUCT DESCRIPTION GENERATOR
-# ==================================================
 
 def generate_product_content(context: dict) -> dict:
     name = str(context.get("product_name", "")).strip()
