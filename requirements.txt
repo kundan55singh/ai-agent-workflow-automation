@@ -1,0 +1,13 @@
+﻿langgraph
+langchain
+langchain-core
+langchain-openai
+pandas
+openpyxl
+pydantic
+python-dotenv
+fastapi
+uvicorn[standard]
+streamlit
+pytest
+langchain-google-genai

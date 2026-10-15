@@ -1,0 +1,3 @@
+﻿source_row,reason,sku,product_name,price
+3,Missing SKU or product name,,Unknown item,100
+4,Missing SKU or product name,V003,,250
